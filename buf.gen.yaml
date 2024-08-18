@@ -1,0 +1,10 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/exsql-io/platform/pkg/lib/proto
+plugins:
+  - local: protoc-gen-go
+    out: pkg/lib/proto
+    opt: paths=source_relative
