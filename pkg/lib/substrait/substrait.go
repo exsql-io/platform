@@ -3,6 +3,7 @@ package substrait
 import (
 	"fmt"
 	substraitpb "github.com/exsql-io/platform/pkg/lib/proto/substrait" // Replace with the actual path
+	"strings"
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
@@ -19,7 +20,7 @@ func ConvertToSubstrait(stmt sqlparser.Statement) *substraitpb.Plan {
 
 // convertSelect handles the conversion of a SELECT statement
 func convertSelect(sel *sqlparser.Select) *substraitpb.Plan {
-	columns := []string{}
+	var columns []string
 	for _, expr := range sel.SelectExprs {
 		if col, ok := expr.(*sqlparser.AliasedExpr); ok {
 			if colName, ok := col.Expr.(*sqlparser.ColName); ok {
@@ -37,22 +38,32 @@ func convertSelect(sel *sqlparser.Select) *substraitpb.Plan {
 		}
 	}
 
-	conditions := []*substraitpb.FilterRel{}
+	var conditions *substraitpb.Expression
 	if sel.Where != nil {
 		conditions = extractConditions(sel.Where.Expr)
 	}
 
 	// Construct the Substrait plan
 	plan := &substraitpb.Plan{
-		Roots: []*substraitpb.Plan_RelRoot{
+		Relations: []*substraitpb.PlanRel{
 			{
-				Input: &substraitpb.Rel{
-					RelType: &substraitpb.Rel_Read{
-						Read: &substraitpb.ReadRel{
-							BaseSchema: &substraitpb.NamedStruct{
-								Names: columns,
+				RelType: &substraitpb.PlanRel_Root{
+					Root: &substraitpb.RelRoot{
+						Names: columns,
+						Input: &substraitpb.Rel{
+							RelType: &substraitpb.Rel_Read{
+								Read: &substraitpb.ReadRel{
+									BaseSchema: &substraitpb.NamedStruct{
+										Names: columns,
+									},
+									ReadType: &substraitpb.ReadRel_NamedTable_{
+										NamedTable: &substraitpb.ReadRel_NamedTable{
+											Names: strings.Split(tableName, "."),
+										},
+									},
+									Filter: conditions,
+								},
 							},
-							TableName: tableName,
 						},
 					},
 				},
@@ -60,37 +71,28 @@ func convertSelect(sel *sqlparser.Select) *substraitpb.Plan {
 		},
 	}
 
-	if len(conditions) > 0 {
-		plan.Roots[0].Input = &substraitpb.Rel{
-			RelType: &substraitpb.Rel_Filter{
-				Filter: &substraitpb.FilterRel{
-					Input: plan.Roots[0].Input,
-					Condition: &substraitpb.Expression{
-						ExprType: &substraitpb.Expression_Condition{
-							Condition: &substraitpb.Condition{
-								Clauses: conditions,
-							},
-						},
-					},
-				},
-			},
-		}
-	}
-
 	return plan
 }
 
 // extractConditions recursively extracts conditions from the WHERE clause
 func extractConditions(expr sqlparser.Expr) *substraitpb.Expression {
-	switch node := expr.(type) {
+	switch condition := expr.(type) {
 	case *sqlparser.ComparisonExpr:
 		return &substraitpb.Expression{
 			RexType: &substraitpb.Expression_ScalarFunction_{
 				ScalarFunction: &substraitpb.Expression_ScalarFunction{
 					FunctionReference: 0,
-					Arguments:         nil,
-					Options:           nil,
-					OutputType:        nil,
+					Arguments: []*substraitpb.FunctionArgument{
+						functionArgument(condition.Left),
+						functionArgument(condition.Right),
+					},
+					OutputType: &substraitpb.Type{
+						Kind: &substraitpb.Type_Bool{
+							Bool: &substraitpb.Type_Boolean{
+								Nullability: substraitpb.Type_NULLABILITY_REQUIRED,
+							},
+						},
+					},
 				},
 			},
 		}
@@ -99,4 +101,35 @@ func extractConditions(expr sqlparser.Expr) *substraitpb.Expression {
 	default:
 		panic(fmt.Sprintf("unknown expression type: %T", expr))
 	}
+}
+
+func functionArgument(expr sqlparser.Expr) *substraitpb.FunctionArgument {
+	switch expr.(type) {
+	case *sqlparser.Literal:
+	case *sqlparser.ColName:
+		return &substraitpb.FunctionArgument{
+			ArgType: &substraitpb.FunctionArgument_Value{
+				Value: &substraitpb.Expression{
+					RexType: &substraitpb.Expression_Selection{
+						Selection: &substraitpb.Expression_FieldReference{
+							ReferenceType: &substraitpb.Expression_FieldReference_DirectReference{
+								DirectReference: &substraitpb.Expression_ReferenceSegment{
+									ReferenceType: &substraitpb.Expression_ReferenceSegment_StructField_{
+										StructField: &substraitpb.Expression_ReferenceSegment_StructField{
+											Field: 0,
+										},
+									},
+								},
+							},
+							RootType: &substraitpb.Expression_FieldReference_RootReference_{
+								RootReference: &substraitpb.Expression_FieldReference_RootReference{},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	return &substraitpb.FunctionArgument{}
 }

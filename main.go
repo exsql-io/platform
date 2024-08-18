@@ -3,9 +3,17 @@ package main
 import (
 	"fmt"
 	"github.com/exsql-io/platform/pkg/lib/sqlparser"
+	"github.com/exsql-io/platform/pkg/lib/substrait"
+	"google.golang.org/protobuf/encoding/protojson"
+	"log"
 )
 
 func main() {
+	_, err := SubstraitExtensions.ReadDir("third_party/substrait/extensions")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	sql := `
 		SELECT name, salary
 		FROM employees
@@ -26,5 +34,6 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Generated Substrait Plan: %+v\n", plan)
+	substraitPlan := substrait.ConvertToSubstrait(plan)
+	fmt.Printf("Generated Substrait Plan: %s\n", protojson.Format(substraitPlan))
 }
